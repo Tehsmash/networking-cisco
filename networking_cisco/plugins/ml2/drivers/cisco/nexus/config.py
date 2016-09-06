@@ -16,6 +16,8 @@
 from oslo_config import cfg
 
 from networking_cisco._i18n import _
+from networking_cisco.config import base
+
 from networking_cisco.plugins.ml2.drivers.cisco.nexus import (
     constants as const)
 from networking_cisco.plugins.ml2.drivers.cisco.nexus import (
@@ -56,6 +58,13 @@ ml2_cisco_opts = [
                help=_("Choice of Nexus Config Driver to be loaded from "
                       "the networking_cisco.ml2.nexus_driver namespace.")),
 
+    base.SubsectionOpt('ml2_mech_cisco_nexus',
+                       dest='nexus_switches',
+                       subopts=[cfg.StrOpt('username'),
+                                cfg.StrOpt('password'),
+                                cfg.StrOpt('physnet'),
+                                cfg.IntOpt('ssh_port', default=22),
+                                base.RemainderOpt('compute_hosts')])
 ]
 
 
@@ -75,39 +84,21 @@ cfg.CONF.register_opts(ml2_cisco_opts, "ml2_cisco")
 class ML2MechCiscoConfig(object):
     """ML2 Mechanism Driver Cisco Configuration class."""
     nexus_dict = {}
+    defined_attributes = [const.USERNAME, const.PASSWORD, const.SSHPORT,
+                          const.PHYSNET, const.NVE_SRC_INTF, const.VPCPOOL]
 
     def __init__(self):
-        self._create_ml2_mech_device_cisco_dictionary()
-
-    def _create_ml2_mech_device_cisco_dictionary(self):
-        """Create the ML2 device cisco dictionary.
-
-        Read data from the ml2_conf_cisco.ini device supported sections.
-        All reserved keywords are saved in the nexus_dict and all other
-        keys (host systems) are saved in the host mapping db.
-        """
-        defined_attributes = [const.USERNAME, const.PASSWORD, const.SSHPORT,
-                              const.PHYSNET, const.NVE_SRC_INTF, const.VPCPOOL]
-        multi_parser = cfg.MultiConfigParser()
-        read_ok = multi_parser.read(cfg.CONF.config_file)
-
-        if len(read_ok) != len(cfg.CONF.config_file):
-            raise cfg.Error(_("Some config files were not parsed properly"))
-
         nxos_db.remove_all_static_host_mappings()
-        for parsed_file in multi_parser.parsed:
-            for parsed_item in parsed_file.keys():
-                dev_id, sep, dev_ip = parsed_item.partition(':')
-                if dev_id.lower() == 'ml2_mech_cisco_nexus':
-                    for dev_key, value in parsed_file[parsed_item].items():
-                        if dev_key in defined_attributes:
-                            self.nexus_dict[dev_ip, dev_key] = value[0]
-                        else:
-                            for if_id in value[0].split(','):
-                                if_type, port = (
-                                    nexus_help.split_interface_name(
-                                        if_id))
-                                interface = nexus_help.format_interface_name(
-                                    if_type, port)
-                                nxos_db.add_host_mapping(
-                                    dev_key, dev_ip, interface, 0, True)
+        for switch_ip, switch in cfg.CONF.ml2_cisco.nexus_switches.items():
+            for opt_name, value in switch.items():
+                if opt_name == 'compute_hosts':
+                    for host, ports in value.items():
+                        for if_id in ports.split(','):
+                            if_type, port = (
+                                nexus_help.split_interface_name(if_id))
+                            interface = nexus_help.format_interface_name(
+                                if_type, port)
+                            nxos_db.add_host_mapping(
+                                host, switch_ip, interface, 0, True)
+                else:
+                    self.nexus_dict[(switch_ip, opt_name)] = value
